@@ -527,6 +527,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
                       child: AdvancedChessBoard(
                         controller: _boardController,
                         boardTheme: BoardTheme.brown,
+                        pieceQuarterTurns: isWhiteTurn ? 0 : 2,
                       ),
                     ),
                   ),
