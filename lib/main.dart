@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:chess/chess.dart' as chess;
-import 'dart:math' as math;
 import 'dart:async';
+import 'package:advanced_chess_board/advanced_chess_board.dart';
 
 void main() {
   runApp(const ChessApp());
@@ -213,25 +212,18 @@ class ChessGameScreen extends StatefulWidget {
 }
 
 class _ChessGameScreenState extends State<ChessGameScreen> {
-  late chess.Chess game;
-  String? selectedSquare;
-  List<String> validDestinations = [];
+  late ChessBoardController _boardController;
 
   Timer? _gameTimer;
   late int _whiteTime;
   late int _blackTime;
   bool _gameStarted = false;
-  bool _isTimeOut = false;
-
-  // Unicode mapping - using solid shapes with \uFE0E to force text presentation (prevents emoji fallback)
-  static const Map<String, String> pieceUnicodes = {
-    'k': '♚\uFE0E', 'q': '♛\uFE0E', 'r': '♜\uFE0E', 'b': '♝\uFE0E', 'n': '♞\uFE0E', 'p': '♟\uFE0E',
-  };
 
   @override
   void initState() {
     super.initState();
-    game = chess.Chess();
+    _boardController = ChessBoardController();
+    _boardController.addListener(_onBoardChanged);
     if (widget.isCountDown) {
       _whiteTime = widget.selectedSeconds;
       _blackTime = widget.selectedSeconds;
@@ -244,19 +236,34 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
   @override
   void dispose() {
     _gameTimer?.cancel();
+    _boardController.dispose();
     super.dispose();
+  }
+
+  void _onBoardChanged() {
+    if (!_gameStarted && _boardController.moveCount > 0) {
+      _startTimer();
+    }
+    
+    if (_boardController.isGameOver) {
+      _showGameOverDialog();
+    }
+    
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _startTimer() {
     _gameStarted = true;
     _gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (game.game_over) {
+      if (_boardController.isGameOver) {
         timer.cancel();
         return;
       }
       setState(() {
         if (widget.isCountDown) {
-          if (game.turn == chess.Color.WHITE) {
+          if (_boardController.playerColor == PlayerColor.white) {
             if (_whiteTime > 0) _whiteTime--;
           } else {
             if (_blackTime > 0) _blackTime--;
@@ -264,11 +271,10 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           
           if (_whiteTime <= 0 || _blackTime <= 0) {
             timer.cancel();
-            _isTimeOut = true;
             _showTimeoutDialog(_whiteTime <= 0 ? "White" : "Black");
           }
         } else {
-          if (game.turn == chess.Color.WHITE) {
+          if (_boardController.playerColor == PlayerColor.white) {
             _whiteTime++;
           } else {
             _blackTime++;
@@ -286,12 +292,9 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
 
   void _resetGame() {
     _gameTimer?.cancel();
+    _boardController.resetBoard();
     setState(() {
-      game = chess.Chess();
-      selectedSquare = null;
-      validDestinations = [];
       _gameStarted = false;
-      _isTimeOut = false;
       if (widget.isCountDown) {
         _whiteTime = widget.selectedSeconds;
         _blackTime = widget.selectedSeconds;
@@ -302,221 +305,16 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     });
   }
 
-  String get _turnText => game.turn == chess.Color.WHITE ? "White's Turn" : "Black's Turn";
-
-  void _handleDragMove(String from, String to) async {
-    if (game.game_over || _isTimeOut) return;
-    if (from == to) return;
-    
-    final piece = game.get(from);
-    if (piece == null || piece.color != game.turn) return;
-
-    final moves = game.generate_moves({'square': from});
-    final validMove = moves.any((m) => m.toAlgebraic == to);
-
-    if (validMove) {
-      String? promotionType;
-      bool isWhite = game.turn == chess.Color.WHITE;
-      bool isPawn = piece.type.toString().toLowerCase() == 'p';
-      bool isPromotionRank = (isWhite && to.endsWith('8')) || (!isWhite && to.endsWith('1'));
-
-      if (isPawn && isPromotionRank) {
-        promotionType = await _showPromotionDialog(isWhite);
-        if (promotionType == null) return;
-      }
-
-      final Map<String, dynamic> moveObj = {
-        'from': from,
-        'to': to,
-      };
-      if (promotionType != null) {
-        moveObj['promotion'] = promotionType;
-      }
-      
-      final moveSuccess = game.move(moveObj);
-
-      if (moveSuccess) {
-        if (!_gameStarted) {
-          _startTimer();
-        }
-        setState(() {
-          selectedSquare = null;
-          validDestinations = [];
-        });
-
-        if (game.game_over) {
-          _showGameOverDialog();
-        }
-      }
-    }
-  }
-
-  void _onSquareTap(String square) async {
-    if (game.game_over || _isTimeOut) return;
-
-    if (selectedSquare == null) {
-      final piece = game.get(square);
-      if (piece != null && piece.color == game.turn) {
-        setState(() {
-          selectedSquare = square;
-          _updateValidDestinations(square);
-        });
-      }
-    } else {
-      if (selectedSquare == square) {
-        setState(() {
-          selectedSquare = null;
-          validDestinations = [];
-        });
-        return;
-      }
-
-      final piece = game.get(square);
-      if (piece != null && piece.color == game.turn) {
-        setState(() {
-          selectedSquare = square;
-          _updateValidDestinations(square);
-        });
-        return;
-      }
-
-      if (validDestinations.contains(square)) {
-        String? promotionType;
-        final selectedPiece = game.get(selectedSquare!);
-        
-        bool isWhite = game.turn == chess.Color.WHITE;
-        bool isPawn = selectedPiece?.type.toString().toLowerCase() == 'p';
-        bool isPromotionRank = (isWhite && square.endsWith('8')) || (!isWhite && square.endsWith('1'));
-
-        if (isPawn && isPromotionRank) {
-          promotionType = await _showPromotionDialog(isWhite);
-          if (promotionType == null) {
-            setState(() {
-              selectedSquare = null;
-              validDestinations = [];
-            });
-            return;
-          }
-        }
-
-        final Map<String, dynamic> moveObj = {
-          'from': selectedSquare,
-          'to': square,
-        };
-        if (promotionType != null) {
-          moveObj['promotion'] = promotionType;
-        }
-        final moveSuccess = game.move(moveObj);
-
-        if (moveSuccess) {
-          if (!_gameStarted) {
-            _startTimer();
-          }
-          setState(() {
-            selectedSquare = null;
-            validDestinations = [];
-          });
-
-          if (game.game_over) {
-            _showGameOverDialog();
-          }
-        } else {
-          setState(() {
-            selectedSquare = null;
-            validDestinations = [];
-          });
-        }
-      } else {
-        setState(() {
-          selectedSquare = null;
-          validDestinations = [];
-        });
-      }
-    }
-  }
-
-  void _updateValidDestinations(String square) {
-    validDestinations.clear();
-    final moves = game.generate_moves({'square': square});
-    for (var m in moves) {
-      validDestinations.add(m.toAlgebraic);
-    }
-  }
-
-  Future<String?> _showPromotionDialog(bool isWhite) async {
-    return showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        Widget dialogContent = AlertDialog(
-          title: const Text('Promote Pawn'),
-          content: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _promotionOption('q', 'q', isWhite),
-              _promotionOption('r', 'r', isWhite),
-              _promotionOption('b', 'b', isWhite),
-              _promotionOption('n', 'n', isWhite),
-            ],
-          ),
-          actions: [
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(context).pop(null),
-            ),
-          ],
-        );
-
-        // Rotate dialog if it is black's turn so they can read it!
-        if (!isWhite) {
-          dialogContent = RotatedBox(
-            quarterTurns: 2,
-            child: dialogContent,
-          );
-        }
-
-        return dialogContent;
-      },
-    );
-  }
-
-  Widget _promotionOption(String value, String pieceKey, bool isWhite) {
-    return InkWell(
-      onTap: () => Navigator.of(context).pop(value),
-      child: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: Text(
-          pieceUnicodes[pieceKey]!,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 40,
-            height: 1.0,
-            color: isWhite ? Colors.white : Colors.black,
-            fontFamily: 'Segoe UI Symbol',
-            fontFamilyFallback: const [
-              'Apple Symbols',
-              'DejaVu Sans',
-              'Noto Sans Symbols',
-              'FreeSans',
-              'sans-serif',
-            ],
-            shadows: const [
-              Shadow(color: Colors.grey, blurRadius: 2)
-            ]
-          ),
-        ),
-      ),
-    );
-  }
+  String get _turnText => _boardController.playerColor == PlayerColor.white ? "White's Turn" : "Black's Turn";
 
   void _showGameOverDialog() {
     String message = "Game Over!";
-    if (game.in_checkmate) {
-      String winner = game.turn == chess.Color.WHITE ? "Black" : "White";
+    if (_boardController.isCheckmate) {
+      String winner = _boardController.playerColor == PlayerColor.white ? "Black" : "White";
       message = "Checkmate! $winner wins.";
-    } else if (game.in_draw) {
+    } else if (_boardController.isDraw) {
       message = "Draw!";
-    } else if (game.in_stalemate) {
+    } else if (_boardController.isStalemate) {
       message = "Stalemate!";
     }
 
@@ -538,7 +336,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           ],
         );
 
-        if (game.turn == chess.Color.BLACK) {
+        if (_boardController.playerColor == PlayerColor.black) {
            dialogContent = RotatedBox(
             quarterTurns: 2,
             child: dialogContent,
@@ -570,7 +368,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           ],
         );
 
-        if (game.turn == chess.Color.BLACK) {
+        if (_boardController.playerColor == PlayerColor.black) {
            dialogContent = RotatedBox(
             quarterTurns: 2,
             child: dialogContent,
@@ -591,7 +389,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
       decoration: BoxDecoration(
         color: isActive 
             ? colorScheme.primaryContainer.withValues(alpha: 0.3)
-            : colorScheme.surfaceVariant.withValues(alpha: 0.1),
+            : colorScheme.surfaceContainerHighest.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isActive 
@@ -630,118 +428,10 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     );
   }
 
-  Widget _buildBoard() {
-    bool isWhiteTurn = game.turn == chess.Color.WHITE;
-    
-    // Board stays fixed now. White at bottom.
-    List<String> ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
-    List<String> files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-
-    return AspectRatio(
-      aspectRatio: 1.0,
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.brown, width: 4),
-        ),
-        child: GridView.builder(
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 8,
-          ),
-          itemCount: 64,
-          itemBuilder: (context, index) {
-            int row = index ~/ 8;
-            int col = index % 8;
-            String square = '${files[col]}${ranks[row]}';
-            
-            bool isDarkSquare = (row + col) % 2 != 0;
-            Color squareColor = isDarkSquare ? Colors.brown.shade700 : Colors.brown.shade200;
-
-            if (selectedSquare == square) {
-              squareColor = Colors.yellow.withValues(alpha: 0.8);
-            } else if (validDestinations.contains(square)) {
-              final piece = game.get(square);
-              if (piece != null && piece.color != game.turn) {
-                squareColor = Colors.redAccent.withValues(alpha: 0.8);
-              } else {
-                squareColor = Colors.greenAccent.withValues(alpha: 0.8);
-              }
-            }
-
-            final piece = game.get(square);
-            String pieceText = '';
-            Color pieceColor = Colors.transparent;
-            if (piece != null) {
-              String typeString = piece.type.toString().toLowerCase();
-              pieceText = pieceUnicodes[typeString] ?? '';
-              pieceColor = piece.color == chess.Color.WHITE ? Colors.white : Colors.black;
-            }
-
-            Widget pieceWidget = pieceText.isNotEmpty ? Text(
-              pieceText,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 40,
-                height: 1.0,
-                color: pieceColor,
-                shadows: const [
-                  Shadow(color: Colors.grey, blurRadius: 2, offset: Offset(1, 1))
-                ]
-              ),
-            ) : const SizedBox.shrink();
-
-            // Flip pieces for the current player
-            if (!isWhiteTurn && pieceText.isNotEmpty) {
-              pieceWidget = RotatedBox(
-                quarterTurns: 2,
-                child: pieceWidget,
-              );
-            }
-
-            Widget squareContent = Container(
-              color: squareColor,
-              child: Center(
-                child: pieceText.isNotEmpty && piece?.color == game.turn
-                  ? Draggable<String>(
-                      key: ValueKey('draggable_${square}_${piece?.type}_${piece?.color}'),
-                      data: square,
-                      feedback: Material(
-                        color: Colors.transparent,
-                        child: pieceWidget,
-                      ),
-                      childWhenDragging: Opacity(
-                        opacity: 0.3,
-                        child: pieceWidget,
-                      ),
-                      child: pieceWidget,
-                    )
-                  : pieceWidget,
-              ),
-            );
-
-            return DragTarget<String>(
-              key: ValueKey('drag_target_$square'),
-              onWillAcceptWithDetails: (details) => true,
-              onAcceptWithDetails: (details) {
-                _handleDragMove(details.data, square);
-              },
-              builder: (context, candidateData, rejectedData) {
-                return GestureDetector(
-                  onTap: () => _onSquareTap(square),
-                  child: squareContent,
-                );
-              },
-            );
-          },
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    bool isCheck = game.in_check;
-    bool isWhiteTurn = game.turn == chess.Color.WHITE;
+    bool isCheck = _boardController.isInCheck;
+    bool isWhiteTurn = _boardController.playerColor == PlayerColor.white;
     
     Widget turnIndicator = Text(
       _turnText,
@@ -771,7 +461,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     }
 
     Widget blackTimer = _buildTimerCard(
-      isActive: _gameStarted && !game.game_over && game.turn == chess.Color.BLACK,
+      isActive: _gameStarted && !_boardController.isGameOver && !isWhiteTurn,
       timeInSeconds: _blackTime,
       isWhite: false,
     );
@@ -783,7 +473,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     }
 
     Widget whiteTimer = _buildTimerCard(
-      isActive: _gameStarted && !game.game_over && game.turn == chess.Color.WHITE,
+      isActive: _gameStarted && !_boardController.isGameOver && isWhiteTurn,
       timeInSeconds: _whiteTime,
       isWhite: true,
     );
@@ -834,7 +524,10 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16.0),
                     child: Center(
-                      child: _buildBoard(),
+                      child: AdvancedChessBoard(
+                        controller: _boardController,
+                        boardTheme: BoardTheme.brown,
+                      ),
                     ),
                   ),
                 ),
@@ -849,67 +542,3 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     );
   }
 }
-
-class ChessPawnPainter extends CustomPainter {
-  final Color color;
-  const ChessPawnPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final borderPaint = Paint()
-      ..color = Colors.grey.shade400
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-
-    double w = size.width;
-    double h = size.height;
-
-    // Draw base
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(w * 0.25, h * 0.75, w * 0.5, h * 0.1),
-        const Radius.circular(3),
-      ),
-      paint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(w * 0.25, h * 0.75, w * 0.5, h * 0.1),
-        const Radius.circular(3),
-      ),
-      borderPaint,
-    );
-
-    // Draw body/pedestal
-    final bodyPath = Path()
-      ..moveTo(w * 0.32, h * 0.75)
-      ..cubicTo(w * 0.37, h * 0.55, w * 0.42, h * 0.45, w * 0.44, h * 0.42)
-      ..lineTo(w * 0.56, h * 0.42)
-      ..cubicTo(w * 0.58, h * 0.45, w * 0.63, h * 0.55, w * 0.68, h * 0.75)
-      ..close();
-    canvas.drawPath(bodyPath, paint);
-    canvas.drawPath(bodyPath, borderPaint);
-
-    // Draw collar
-    canvas.drawOval(
-      Rect.fromLTWH(w * 0.38, h * 0.4, w * 0.24, h * 0.05),
-      paint,
-    );
-    canvas.drawOval(
-      Rect.fromLTWH(w * 0.38, h * 0.4, w * 0.24, h * 0.05),
-      borderPaint,
-    );
-
-    // Draw head
-    canvas.drawCircle(Offset(w * 0.5, h * 0.28), w * 0.15, paint);
-    canvas.drawCircle(Offset(w * 0.5, h * 0.28), w * 0.15, borderPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
