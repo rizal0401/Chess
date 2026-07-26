@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:advanced_chess_board/advanced_chess_board.dart';
+import 'dart:math';
+
+enum GameMode { pvp, playAsWhite, playAsBlack }
 
 void main() {
   runApp(const ChessApp());
@@ -32,6 +35,7 @@ class MainMenuScreen extends StatefulWidget {
 class _MainMenuScreenState extends State<MainMenuScreen> {
   bool _isCountDown = false;
   int _selectedSeconds = 300;
+  GameMode _selectedMode = GameMode.pvp;
 
   String _formatTime(int totalSeconds) {
     int minutes = totalSeconds ~/ 60;
@@ -59,8 +63,39 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            const Text('Select Game Mode:', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ChoiceChip(
+                  label: const Padding(padding: EdgeInsets.all(8.0), child: Text('PvP', style: TextStyle(fontSize: 18))),
+                  selected: _selectedMode == GameMode.pvp,
+                  onSelected: (selected) {
+                    if (selected) setState(() => _selectedMode = GameMode.pvp);
+                  },
+                ),
+                const SizedBox(width: 10),
+                ChoiceChip(
+                  label: const Padding(padding: EdgeInsets.all(8.0), child: Text('vs Bot (White)', style: TextStyle(fontSize: 18))),
+                  selected: _selectedMode == GameMode.playAsWhite,
+                  onSelected: (selected) {
+                    if (selected) setState(() => _selectedMode = GameMode.playAsWhite);
+                  },
+                ),
+                const SizedBox(width: 10),
+                ChoiceChip(
+                  label: const Padding(padding: EdgeInsets.all(8.0), child: Text('vs Bot (Black)', style: TextStyle(fontSize: 18))),
+                  selected: _selectedMode == GameMode.playAsBlack,
+                  onSelected: (selected) {
+                    if (selected) setState(() => _selectedMode = GameMode.playAsBlack);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 30),
             const Text('Select Timer Mode:', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -177,6 +212,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                     builder: (context) => ChessGameScreen(
                       isCountDown: _isCountDown,
                       selectedSeconds: _selectedSeconds,
+                      gameMode: _selectedMode,
                     ),
                   ),
                 );
@@ -200,11 +236,13 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
 class ChessGameScreen extends StatefulWidget {
   final bool isCountDown;
   final int selectedSeconds;
+  final GameMode gameMode;
 
   const ChessGameScreen({
     super.key,
     required this.isCountDown,
     required this.selectedSeconds,
+    required this.gameMode,
   });
 
   @override
@@ -231,6 +269,10 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
       _whiteTime = 0;
       _blackTime = 0;
     }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _makeBotMoveIfNecessary();
+    });
   }
 
   @override
@@ -252,6 +294,58 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     if (mounted) {
       setState(() {});
     }
+
+    _makeBotMoveIfNecessary();
+  }
+
+  bool _isBotThinking = false;
+
+  bool _isBotTurn() {
+    if (_boardController.isGameOver) return false;
+    if (widget.gameMode == GameMode.pvp) return false;
+    
+    if (widget.gameMode == GameMode.playAsWhite && _boardController.playerColor == PlayerColor.black) {
+      return true;
+    }
+    if (widget.gameMode == GameMode.playAsBlack && _boardController.playerColor == PlayerColor.white) {
+      return true;
+    }
+    return false;
+  }
+
+  void _makeBotMoveIfNecessary() async {
+    if (_isBotThinking) return;
+    if (!_isBotTurn()) return;
+
+    _isBotThinking = true;
+
+    // Simulate thinking delay
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (!mounted || !_isBotTurn()) {
+      _isBotThinking = false;
+      return;
+    }
+
+    final moves = _boardController.game.moves({'verbose': true});
+    if (moves.isNotEmpty) {
+      moves.shuffle(Random());
+      var selectedMove = moves.first;
+      for (var m in moves) {
+        if ((m as Map).containsKey('captured')) {
+          selectedMove = m;
+          break; // take first capture we find after shuffle
+        }
+      }
+
+      final moveMap = selectedMove as Map;
+      _boardController.makeMove(
+        from: moveMap['from'],
+        to: moveMap['to'],
+        promotion: moveMap['promotion'],
+      );
+    }
+    _isBotThinking = false;
   }
 
   void _startTimer() {
@@ -303,6 +397,8 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
         _blackTime = 0;
       }
     });
+    
+    _makeBotMoveIfNecessary();
   }
 
   String get _turnText => _boardController.playerColor == PlayerColor.white ? "White's Turn" : "Black's Turn";
@@ -336,7 +432,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           ],
         );
 
-        if (_boardController.playerColor == PlayerColor.black) {
+        if (widget.gameMode == GameMode.pvp && _boardController.playerColor == PlayerColor.black) {
            dialogContent = RotatedBox(
             quarterTurns: 2,
             child: dialogContent,
@@ -368,7 +464,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           ],
         );
 
-        if (_boardController.playerColor == PlayerColor.black) {
+        if (widget.gameMode == GameMode.pvp && _boardController.playerColor == PlayerColor.black) {
            dialogContent = RotatedBox(
             quarterTurns: 2,
             child: dialogContent,
@@ -432,6 +528,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
   Widget build(BuildContext context) {
     bool isCheck = _boardController.isInCheck;
     bool isWhiteTurn = _boardController.playerColor == PlayerColor.white;
+    bool isPvP = widget.gameMode == GameMode.pvp;
     
     Widget turnIndicator = Text(
       _turnText,
@@ -441,7 +538,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
       ),
     );
 
-    if (!isWhiteTurn) {
+    if (isPvP && !isWhiteTurn) {
       turnIndicator = RotatedBox(
         quarterTurns: 2,
         child: turnIndicator,
@@ -453,36 +550,39 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
       style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 20),
     );
 
-    if (!isWhiteTurn && isCheck) {
+    if (isPvP && !isWhiteTurn && isCheck) {
       checkIndicator = RotatedBox(
         quarterTurns: 2,
         child: checkIndicator,
       );
     }
 
-    Widget blackTimer = _buildTimerCard(
+    Widget blackTimerWidget = _buildTimerCard(
       isActive: _gameStarted && !_boardController.isGameOver && !isWhiteTurn,
       timeInSeconds: _blackTime,
       isWhite: false,
     );
-    if (!isWhiteTurn) {
-      blackTimer = RotatedBox(
+    if (isPvP && !isWhiteTurn) {
+      blackTimerWidget = RotatedBox(
         quarterTurns: 2,
-        child: blackTimer,
+        child: blackTimerWidget,
       );
     }
 
-    Widget whiteTimer = _buildTimerCard(
+    Widget whiteTimerWidget = _buildTimerCard(
       isActive: _gameStarted && !_boardController.isGameOver && isWhiteTurn,
       timeInSeconds: _whiteTime,
       isWhite: true,
     );
-    if (!isWhiteTurn) {
-      whiteTimer = RotatedBox(
+    if (isPvP && !isWhiteTurn) {
+      whiteTimerWidget = RotatedBox(
         quarterTurns: 2,
-        child: whiteTimer,
+        child: whiteTimerWidget,
       );
     }
+
+    Widget topTimer = widget.gameMode == GameMode.playAsBlack ? whiteTimerWidget : blackTimerWidget;
+    Widget bottomTimer = widget.gameMode == GameMode.playAsBlack ? blackTimerWidget : whiteTimerWidget;
     
     return Scaffold(
       appBar: AppBar(
@@ -517,23 +617,27 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
                 ),
                 if (isCheck) checkIndicator,
                 const SizedBox(height: 16),
-                blackTimer,
+                topTimer,
                 const SizedBox(height: 16),
                 Flexible(
                   flex: 6,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16.0),
                     child: Center(
-                      child: AdvancedChessBoard(
-                        controller: _boardController,
-                        boardTheme: BoardTheme.brown,
-                        pieceQuarterTurns: isWhiteTurn ? 0 : 2,
+                      child: IgnorePointer(
+                        ignoring: _isBotThinking || _isBotTurn() || _boardController.isGameOver,
+                        child: AdvancedChessBoard(
+                          controller: _boardController,
+                          boardTheme: BoardTheme.brown,
+                          pieceQuarterTurns: isPvP ? (isWhiteTurn ? 0 : 2) : 0,
+                          boardOrientation: widget.gameMode == GameMode.playAsBlack ? PlayerColor.black : PlayerColor.white,
+                        ),
                       ),
                     ),
                   ),
                 ),
                 const SizedBox(height: 16),
-                whiteTimer,
+                bottomTimer,
                 const Spacer(flex: 2),
               ],
             ),
