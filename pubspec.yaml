@@ -35,6 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   chess: ^0.8.1
+  stockfish: ^1.8.1
   advanced_chess_board:
     path: packages/advanced_chess_board
 

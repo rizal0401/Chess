@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:advanced_chess_board/advanced_chess_board.dart';
 import 'dart:math';
+import 'services/stockfish_service.dart';
 
 enum GameMode { pvp, playAsWhite, playAsBlack }
 
@@ -36,6 +37,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   bool _isCountDown = false;
   int _selectedSeconds = 300;
   GameMode _selectedMode = GameMode.pvp;
+  BotDifficulty _selectedDifficulty = BotDifficulty.medium;
 
   String _formatTime(int totalSeconds) {
     int minutes = totalSeconds ~/ 60;
@@ -93,6 +95,52 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                 ),
               ],
             ),
+            if (_selectedMode != GameMode.pvp) ...[
+              const SizedBox(height: 24),
+              const Text('Select Bot Difficulty:', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
+                  children: BotDifficulty.values.map((difficulty) {
+                    final isSelected = _selectedDifficulty == difficulty;
+                    return ChoiceChip(
+                      selected: isSelected,
+                      onSelected: (selected) {
+                        if (selected) setState(() => _selectedDifficulty = difficulty);
+                      },
+                      label: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${difficulty.label} (${difficulty.elo} Elo)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: isSelected ? Colors.white : Colors.white70,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              difficulty.description,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isSelected ? Colors.white70 : Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
             const SizedBox(height: 30),
             const Text('Select Timer Mode:', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
@@ -213,6 +261,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                       isCountDown: _isCountDown,
                       selectedSeconds: _selectedSeconds,
                       gameMode: _selectedMode,
+                      botDifficulty: _selectedDifficulty,
                     ),
                   ),
                 );
@@ -237,12 +286,14 @@ class ChessGameScreen extends StatefulWidget {
   final bool isCountDown;
   final int selectedSeconds;
   final GameMode gameMode;
+  final BotDifficulty botDifficulty;
 
   const ChessGameScreen({
     super.key,
     required this.isCountDown,
     required this.selectedSeconds,
     required this.gameMode,
+    this.botDifficulty = BotDifficulty.medium,
   });
 
   @override
@@ -251,6 +302,7 @@ class ChessGameScreen extends StatefulWidget {
 
 class _ChessGameScreenState extends State<ChessGameScreen> {
   late ChessBoardController _boardController;
+  final StockfishService _stockfishService = StockfishService();
 
   Timer? _gameTimer;
   late int _whiteTime;
@@ -262,6 +314,9 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     super.initState();
     _boardController = ChessBoardController();
     _boardController.addListener(_onBoardChanged);
+    if (widget.gameMode != GameMode.pvp) {
+      _stockfishService.init();
+    }
     if (widget.isCountDown) {
       _whiteTime = widget.selectedSeconds;
       _blackTime = widget.selectedSeconds;
@@ -278,6 +333,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
   @override
   void dispose() {
     _gameTimer?.cancel();
+    _stockfishService.dispose();
     _boardController.dispose();
     super.dispose();
   }
@@ -318,34 +374,57 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     if (!_isBotTurn()) return;
 
     _isBotThinking = true;
+    if (mounted) setState(() {});
 
-    // Simulate thinking delay
-    await Future.delayed(const Duration(milliseconds: 500));
+    final stopwatch = Stopwatch()..start();
+
+    // Call Stockfish service to get best move based on chosen difficulty
+    final moveMap = await _stockfishService.getBestMove(
+      fen: _boardController.fen,
+      difficulty: widget.botDifficulty,
+    );
+
+    // Enforce smooth minimum thinking delay (400ms) so moves don't feel jarringly instant
+    final elapsed = stopwatch.elapsedMilliseconds;
+    if (elapsed < 400) {
+      await Future.delayed(Duration(milliseconds: 400 - elapsed));
+    }
 
     if (!mounted || !_isBotTurn()) {
       _isBotThinking = false;
+      if (mounted) setState(() {});
       return;
     }
 
-    final moves = _boardController.game.moves({'verbose': true});
-    if (moves.isNotEmpty) {
-      moves.shuffle(Random());
-      var selectedMove = moves.first;
-      for (var m in moves) {
-        if ((m as Map).containsKey('captured')) {
-          selectedMove = m;
-          break; // take first capture we find after shuffle
-        }
-      }
-
-      final moveMap = selectedMove as Map;
+    if (moveMap != null) {
       _boardController.makeMove(
-        from: moveMap['from'],
-        to: moveMap['to'],
+        from: moveMap['from']!,
+        to: moveMap['to']!,
         promotion: moveMap['promotion'],
       );
+    } else {
+      // Fallback: pick random move if Stockfish output wasn't available
+      final moves = _boardController.game.moves({'verbose': true});
+      if (moves.isNotEmpty) {
+        moves.shuffle(Random());
+        var selectedMove = moves.first;
+        for (var m in moves) {
+          if ((m as Map).containsKey('captured')) {
+            selectedMove = m;
+            break;
+          }
+        }
+
+        final moveMapFallback = selectedMove as Map;
+        _boardController.makeMove(
+          from: moveMapFallback['from'],
+          to: moveMapFallback['to'],
+          promotion: moveMapFallback['promotion'],
+        );
+      }
     }
     _isBotThinking = false;
+    if (mounted) setState(() {});
   }
 
   void _startTimer() {
@@ -584,9 +663,25 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     Widget topTimer = widget.gameMode == GameMode.playAsBlack ? whiteTimerWidget : blackTimerWidget;
     Widget bottomTimer = widget.gameMode == GameMode.playAsBlack ? blackTimerWidget : whiteTimerWidget;
     
+    final isBotMode = widget.gameMode != GameMode.pvp;
+    
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Local Chess'),
+        title: Column(
+          children: [
+            const Text('Local Chess'),
+            if (isBotMode)
+              Text(
+                'vs Bot (${widget.botDifficulty.label} - ${widget.botDifficulty.elo} Elo)',
+                style: const TextStyle(fontSize: 12, color: Colors.white70),
+              )
+            else
+              const Text(
+                'Player vs Player',
+                style: TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+          ],
+        ),
         centerTitle: true,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
@@ -612,9 +707,28 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
               children: [
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
                   child: turnIndicator,
                 ),
+                if (_isBotThinking)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8.0),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Stockfish is thinking...',
+                          style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.amberAccent),
+                        ),
+                      ],
+                    ),
+                  ),
                 if (isCheck) checkIndicator,
                 const SizedBox(height: 16),
                 topTimer,
