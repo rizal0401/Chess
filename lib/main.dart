@@ -308,6 +308,8 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
   late int _whiteTime;
   late int _blackTime;
   bool _gameStarted = false;
+  HintArrow? _hintArrow;
+  bool _isGettingHint = false;
 
   @override
   void initState() {
@@ -339,6 +341,8 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
   }
 
   void _onBoardChanged() {
+    _hintArrow = null;
+
     if (!_gameStarted && _boardController.moveCount > 0) {
       _startTimer();
     }
@@ -467,6 +471,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     _gameTimer?.cancel();
     _boardController.resetBoard();
     setState(() {
+      _hintArrow = null;
       _gameStarted = false;
       if (widget.isCountDown) {
         _whiteTime = widget.selectedSeconds;
@@ -484,6 +489,10 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     if (_isBotThinking) return;
     if (_boardController.moveCount == 0) return;
 
+    setState(() {
+      _hintArrow = null;
+    });
+
     if (widget.gameMode == GameMode.pvp) {
       _boardController.undo();
     } else {
@@ -497,6 +506,63 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
 
     if (_gameStarted && (_gameTimer == null || !_gameTimer!.isActive) && !_boardController.isGameOver) {
       _startTimer();
+    }
+  }
+
+  void _getHint() async {
+    if (_isGettingHint || _isBotThinking || _boardController.isGameOver) return;
+    if (_isBotTurn()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Wait for the bot to finish its move!"),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isGettingHint = true;
+    });
+
+    final bestMove = await _stockfishService.getBestMove(
+      fen: _boardController.fen,
+      difficulty: BotDifficulty.master,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _isGettingHint = false;
+    });
+
+    if (bestMove != null && bestMove['from'] != null && bestMove['to'] != null) {
+      final from = bestMove['from']!;
+      final to = bestMove['to']!;
+      setState(() {
+        _hintArrow = HintArrow(startSquare: from, endSquare: to);
+      });
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("💡 Hint: Recommended move from $from to $to"),
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'OK',
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            },
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("No hint available for this position."),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -719,6 +785,17 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
         ),
         actions: [
           IconButton(
+            icon: _isGettingHint
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
+                  )
+                : const Icon(Icons.lightbulb_outline, color: Colors.amber),
+            onPressed: (_isBotThinking || _isBotTurn() || _boardController.isGameOver) ? null : _getHint,
+            tooltip: 'Get Move Hint',
+          ),
+          IconButton(
             icon: const Icon(Icons.undo),
             onPressed: (_isBotThinking || _boardController.moveCount == 0) ? null : _undoMove,
             tooltip: 'Undo Move',
@@ -777,6 +854,7 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
                           boardTheme: BoardTheme.brown,
                           pieceQuarterTurns: isPvP ? (isWhiteTurn ? 0 : 2) : 0,
                           boardOrientation: widget.gameMode == GameMode.playAsBlack ? PlayerColor.black : PlayerColor.white,
+                          hintArrow: _hintArrow,
                         ),
                       ),
                     ),
