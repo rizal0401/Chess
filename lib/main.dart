@@ -480,6 +480,26 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
     _makeBotMoveIfNecessary();
   }
 
+  void _undoMove() {
+    if (_isBotThinking) return;
+    if (_boardController.moveCount == 0) return;
+
+    if (widget.gameMode == GameMode.pvp) {
+      _boardController.undo();
+    } else {
+      if (_boardController.moveCount >= 2) {
+        _boardController.undo(notify: false);
+        _boardController.undo();
+      } else {
+        _boardController.undo();
+      }
+    }
+
+    if (_gameStarted && (_gameTimer == null || !_gameTimer!.isActive) && !_boardController.isGameOver) {
+      _startTimer();
+    }
+  }
+
   String get _turnText => _boardController.playerColor == PlayerColor.white ? "White's Turn" : "Black's Turn";
 
   void _showGameOverDialog() {
@@ -501,6 +521,13 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           title: const Text('Game Over'),
           content: Text(message),
           actions: [
+            TextButton(
+              child: const Text('Undo'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _undoMove();
+              },
+            ),
             TextButton(
               child: const Text('Play Again'),
               onPressed: () {
@@ -691,6 +718,11 @@ class _ChessGameScreenState extends State<ChessGameScreen> {
           tooltip: 'Back to Menu',
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.undo),
+            onPressed: (_isBotThinking || _boardController.moveCount == 0) ? null : _undoMove,
+            tooltip: 'Undo Move',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _resetGame,
